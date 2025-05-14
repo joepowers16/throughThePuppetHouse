@@ -1,0 +1,13 @@
+---
+title: "Bambi"
+author: "Joseph Powers"
+date: "2024-04-26"
+image: 'post.png'
+categories: [bayesian, hlm, mlm, modeling]
+draft: true
+warning: false
+message: false
+echo: true
+freeze: false
+code-fold: true
+---

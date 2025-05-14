@@ -1,0 +1,5 @@
+- source: project
+  quarto-pub:
+    - id: 9a2eeaf8-35bc-4d56-aac0-6bc5211c21a2
+      url: 'https://joepowers16.quarto.pub/throughthepuppethouse'
+      freeze: auto

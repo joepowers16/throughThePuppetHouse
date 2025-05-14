@@ -1,0 +1,31 @@
+---
+title: "BIDS"
+author: "Joseph Powers"
+date: "2024-11-24"
+image: 'post.png'
+categories: [uncategorized]
+draft: true
+warning: false
+message: false
+echo: true
+freeze: false
+code-fold: true
+---
+
+```{r}
+pacman::p_load(tidyverse, glue, scales)
+theme_set(theme_bw())
+```
+
+# References
+https://www.sandiego.gov/economic-development/about/bids#Bidlo
+
+https://missionhillsbid.com/about-mission-hills-business-improvement-district/
+
+https://www.sandiego.gov/sites/default/files/mission_hills_bid_o-17229_signed.pdf
+
+https://www.sandiego.gov/sites/default/files/0313_bid_map_2018_final_landscape.pdf
+
+https://missionhillsbid.com/meetings-and-agendas/
+
+https://www.missionhillstowncouncil.org/who-we-are/our-neighborhood/

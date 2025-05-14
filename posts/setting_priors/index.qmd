@@ -1,0 +1,404 @@
+---
+title: "Getting and Setting Priors in Bayesian Models with brms package"
+author: "Joseph Powers"
+date: "2024-04-21"
+image: 'post.png'
+categories: [bayesian, hlm, mlm, modeling]
+draft: false
+warning: false
+message: false
+echo: true
+freeze: false
+code-fold: true
+---
+
+Let's pretend we have data from a "typical" AB test of a rate-based metrics. Could be conversions, clicks, etc., doesn't matter. 
+
+```{r}
+pacman::p_load(tidybayes, brms, glue, scales, tidyverse, truncnorm, patchwork, conflicted)
+
+conflicted::conflict_prefer("filter", "dplyr")
+
+theme_set(theme_bw())
+
+lor_to_prob <- function(lor){exp(lor) / (1+exp(lor))}
+prob_to_lor <- function(prob){log(prob / (1-prob))}
+
+# prob_to_lor(.5)
+# lor_to_prob(0)
+```
+
+```{r}
+SIMS <- 4e3
+TRIALS <- 10e3
+RATE_A <- .65
+RATE_B <- .66
+THETA_B <- RATE_B - RATE_A
+
+set.seed(41) # 1.5%
+
+df_wide <- 
+    tibble(
+        a = rbinom(TRIALS, 1, RATE_A),
+        b = rbinom(TRIALS, 1, RATE_B)
+    )
+
+df_long <- 
+    df_wide |> 
+    pivot_longer(
+        everything(), 
+        names_to = 'recipe',
+        values_to = 'outcome'
+    )
+
+# head(df_long)
+```
+
+```{r}
+df_long |> 
+    summarise(rate = mean(outcome), .by = recipe) |> 
+    ggplot(aes(x = recipe, y = rate, label = percent(rate, .1))) + 
+    geom_col() + 
+    geom_label() + 
+    scale_y_continuous(labels = percent)
+```
+
+```{r}
+df_agg <- 
+    df_wide |> 
+    summarise(
+        a = mean(a),
+        b = mean(b)
+    ) |> 
+    mutate(
+        b_dtc = b-a,
+        b_itc = b/a
+    )
+
+df_agg
+```
+
+```{r}
+B_DTC <- df_agg$b_dtc
+```
+
+We have observed that B is outperforming A by `r percent(B_DTC, .01)` points.
+
+```{r}
+df_agg |> 
+    ggplot(aes(x = b_dtc, y = 1)) + 
+    geom_vline(xintercept = B_DTC, linetype = 'dotted') + 
+    geom_point(pch = 21, color = 'black', fill = 'blue', size=2) + 
+    coord_cartesian(
+        xlim = c(-.02, .04),
+        ylim = c(0, 10)
+    ) + 
+    scale_x_continuous(
+        breaks = seq(-.02, .04, .01), 
+        labels = ~percent(.x, .01),
+        sec.axis = dup_axis(
+            breaks = B_DTC,
+            name = "Observed Treatment Effect"
+        )
+    ) + 
+    labs(x = "Potential Treatment Effects", y = NULL) + 
+    theme(
+        panel.grid = element_blank(),
+        axis.ticks.y = element_blank(), axis.text.y = element_blank())
+```
+
+What can we say about this `r percent(B_DTC, .01)` treatment effect? Maybe we could explore the range of real effects that are likely to have produced our observed effect: 
+```{r}
+set.seed(42)
+
+df_post <- 
+    tibble(
+        post_a = rbinom(SIMS, TRIALS, df_agg$a) / TRIALS,
+        post_b = rbinom(SIMS, TRIALS, df_agg$b) / TRIALS,
+        post_b_dtc = post_b - post_a
+    )
+
+ci95 <- quantile(df_post$post_b_dtc, c(.025, .975))
+
+df_post |> 
+    ggplot(aes(x = post_b_dtc)) + 
+    geom_density(fill='blue', alpha = .5) + 
+    coord_cartesian(
+        xlim = c(-.02, .04),
+    ) +
+    scale_x_continuous(
+        breaks = seq(-.02, .04, .01), 
+        labels = ~percent(.x, .01),
+        sec.axis = dup_axis(
+            breaks = B_DTC,
+            name = "Observed Treatment Effect"
+        )
+    ) + 
+    labs(x = "Plausible Real Treatment Effects", y = NULL) + 
+    theme(
+        panel.grid = element_blank(),
+        axis.ticks.y = element_blank(), axis.text.y = element_blank()
+        )
+```
+
+So we can see that the range of plausible treatment effects extends from about -2% to 4%, and we can eyeball that the 90% CI would extend from about 0.25 to 2.5%, which would mean that 0.25% is about as likely as 2.5% to be the true treatment effect. Pause, **do you really believe that 2.5% is just as plausible as 0.25% to be the true effect?** I don't. In my experience 0.25% point effect are much more likely that 2.5% points effects.
+
+We can and should leverage such knowledge about what effect sizes are likley by supplying our model with informed priors. 
+
+```{r}
+df_agg_glm <- 
+    df_long |> 
+    summarise(
+        events = sum(outcome),
+        trials = length(outcome),
+        .by = recipe
+    )
+```
+
+# Fit Bayesian Models
+Use `get_prior()` to see which priors need to be supplied.
+```{r echo=TRUE}
+my_formula <- "events | trials(trials) ~ recipe"
+
+brms::get_prior(
+    formula = my_formula,
+    family = binomial,
+    data = df_agg_glm
+)
+```
+
+# Fit a Model with Uninformed Priors
+
+Since we're predicting a binary outcome we'll be using logistic regression, which will require our priors to be expressed in log odds ratios. 
+
+I often demonstrate uninformed priors in log odds of `uniform(-5, 5)` as this represents a belief that all rates between 1% and 99% are equally likely. It supplies practically no new information to the model. 
+```{r}
+lor_to_prob(5)
+lor_to_prob(-5)
+```
+
+```{r}
+fit_uninformed <- brm(
+    formula = my_formula,
+    data = df_agg_glm,
+    family = binomial,
+    prior = 
+        prior(uniform(-5, 5), class = Intercept) + 
+        prior(uniform(-5, 5), class = b, coef = recipeb), 
+    cores = 4,
+    seed = 44,
+    file = 'fits/fit_uninformed.rds'
+)
+```
+
+Extract posterior draws:
+```{r}
+draws_uninformed <- as_draws_df(fit_uninformed)
+
+head(draws_uninformed)
+```
+
+```{r}
+df_post_uninformed <- 
+    draws_uninformed |> 
+    mutate(
+        b_pr = lor_to_prob(b_Intercept + b_recipeb) - lor_to_prob(b_Intercept)
+    ) 
+
+PR_LOSS <- mean(df_post_uninformed$b_pr < 0)
+MEAN_LOSS_LOSS <- mean(df_post_uninformed$b_pr[df_post_uninformed$b_pr < 0])
+E_LOSS <- PR_LOSS * MEAN_LOSS_LOSS
+```
+
+```{r}
+dens <- density(df_post_uninformed$b_pr)
+
+df_fill_uninf <- tibble(x = dens$x, y = dens$y)
+
+my_breaks <- median(df_post_uninformed$b_pr)
+my_labels <- percent(my_breaks)
+
+df_fill_uninf |>
+    ggplot(aes(x=x, y=y)) + 
+    geom_line() + 
+    geom_area(data = filter(df_fill_uninf, x >= 0), fill = 'blue', alpha=.5) + 
+    geom_area(data = filter(df_fill_uninf, x < 0), fill = 'red', alpha=.5) + 
+    scale_x_continuous(
+        breaks = seq(-1, 1, .01),
+        labels = ~percent(.x,.1),
+        sec.axis = 
+            dup_axis(
+                breaks = my_breaks,
+                name = "Median Posterior Treatment Effect")) + 
+    labs(y = NULL, x = "Plausible Treatment Effects", 
+         title = glue("There is a {percent(PR_LOSS,.1)} probability that the real effect is harmful"), 
+         subtitle = glue("The expected loss is {percent(E_LOSS,.01)}")) +  
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank()) 
+```
+
+# Fit a Model with Informed Priors
+```{r}
+prob_to_lor(.645)
+(prob_to_lor(.645 + .05) - prob_to_lor(.645)) / 2
+
+(prob_to_lor(.645 + .01) - prob_to_lor(.645)) / 2
+```
+
+```{r}
+fit_informed <- brm(
+    formula = my_formula,
+    data = df_agg_glm,
+    family = binomial,
+    prior = 
+        prior(normal(0.5971325, 0.1132338), class = Intercept) + 
+        prior(normal(0, 0.02197915), class = b, coef = recipeb), 
+    cores = 4,
+    seed = 44,
+    file = 'fits/fit_informed.rds'
+)
+```
+
+```{r}
+draws_informed <- as_draws_df(fit_informed)
+
+head(draws_informed)
+```
+
+```{r}
+df_post_informed <- 
+    draws_informed |> 
+    mutate(
+        b_pr = lor_to_prob(b_Intercept + b_recipeb) - lor_to_prob(b_Intercept)
+    ) 
+
+PR_LOSS <- mean(df_post_informed$b_pr < 0)
+MEAN_LOSS_LOSS <- mean(df_post_informed$b_pr[df_post_informed$b_pr < 0])
+E_LOSS <- PR_LOSS * MEAN_LOSS_LOSS
+```
+
+```{r}
+dens <- density(df_post_informed$b_pr)
+
+df_fill_inf <- tibble(x = dens$x, y = dens$y)
+
+my_breaks <- median(df_post_informed$b_pr)
+my_labels <- percent(my_breaks)
+
+df_fill_inf |>
+    ggplot(aes(x=x, y=y)) + 
+    geom_line() + 
+    geom_area(data = filter(df_fill_inf, x >= 0), fill = 'blue', alpha=.5) + 
+    geom_area(data = filter(df_fill_inf, x < 0), fill = 'red', alpha=.5) + 
+    scale_x_continuous(
+        breaks = seq(-1, 1, .01),
+        labels = ~percent(.x,.1),
+        sec.axis = 
+            dup_axis(
+                breaks = my_breaks,
+                name = "Median Posterior Treatment Effect")) + 
+    labs(y = NULL, x = "Plausible Treatment Effects", 
+         title = glue("There is a {percent(PR_LOSS,.1)} probability that the real effect is harmful"), 
+         subtitle = glue("The expected loss is {percent(E_LOSS,.01)}")) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank()) 
+```
+
+```{r}
+set.seed(42)
+df_prior <- tibble(x=rnorm(4e3, 0, .005))
+dens <- density(df_prior$x)
+df_prior <- 
+    tibble(
+        x = dens$x, 
+        y = dens$y, 
+        distribution = "Prior of Normal(0, 0.5%)")
+```
+
+Below you can see how the Posterior with Normal(0, 0.5%) Prior combines information from the likelihood of the raw data and the Normal(0, 0.5%) Prior. 
+```{r}
+bind_rows(
+df_fill_inf |> mutate(distribution = 'Posterior with Normal(0, 0.5%) Prior'),
+df_fill_uninf |> mutate(distribution = 'Posterior with Uniform(1%, 99%) Prior')
+) |> 
+    ggplot(aes(x=x, y=y, group=distribution,  fill=distribution)) + 
+    geom_line() + 
+    geom_area(position = 'identity', alpha=.5) + 
+    labs(x = "Plausible Treatment Effects", y = NULL) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank()) + 
+    geom_line(
+        data = df_prior,
+        aes(x = x, y = y),
+        linetype = 'dashed'
+    ) + 
+    scale_x_continuous(
+        breaks = seq(-1, 1, .01),
+        labels = ~percent(.x,.1),
+        sec.axis = 
+            dup_axis(
+                breaks = THETA_B,
+                name = "True Treatment Effect"))
+```
+
+
+```{r}
+dens <- density(df_post$post_b_dtc)
+
+df_likelihood <- tibble(x = dens$x, y = dens$y)
+
+my_values <- c(1,1,2)
+names(my_values) <- c('Posterior with Normal(0, 0.5%) Prior', 'Likelihood of Raw Data', "Prior of Normal(0, 0.5%)")
+
+bind_rows(
+    df_fill_inf |> mutate(distribution = 'Posterior with Normal(0, 0.5%) Prior', mylinetype = 1),
+    df_likelihood |> mutate(distribution = 'Likelihood of Raw Data', mylinetype = 1)
+    ) |> 
+    ggplot(aes(x=x, y=y, group=distribution, fill=distribution, linetype = distribution)) + 
+    geom_line(show.legend = FALSE) + 
+    geom_area(position = 'identity', alpha=.5) + 
+    labs(x = "Plausible Treatment Effects", y = NULL) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank()) + 
+    geom_line(data = df_prior) + 
+    scale_x_continuous(
+        breaks = seq(-1, 1, .01),
+        labels = ~percent(.x, 1),
+        sec.axis = 
+            dup_axis(
+                breaks = THETA_B,
+                name = "True Treatment Effect")) + 
+    scale_linetype_manual(
+        values = my_values
+    )
+```
+
+
+```{r include=FALSE}
+bind_rows(
+df_fill_inf |> mutate(distribution = 'Posterior with Normal(0, 0.5%) Prior'),
+df_fill_uninf |> mutate(distribution = 'Posterior with Uniform(1%, 99%) Prior')
+) |> 
+    ggplot(aes(x=x, y=y, group=distribution,  fill=distribution)) + 
+    geom_line() + 
+    geom_area(position = 'identity', alpha=.5) + 
+    labs(x = "Plausible Treatment Effects", y = NULL) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank()) + 
+    geom_line(
+        data = df_prior,
+        aes(x = x, y = y),
+        linetype = 'dashed'
+    ) + 
+    scale_x_continuous(
+        breaks = seq(-1, 1, .01),
+        labels = ~percent(.x,.1),
+        sec.axis = 
+            dup_axis(
+                breaks = THETA_B,
+                name = "True Treatment Effect")) + 
+    guides(fill = FALSE)
+
+ggsave('post.png')
+```
+
+
+```{r}
+sessionInfo()
+```
+

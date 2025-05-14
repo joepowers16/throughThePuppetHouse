@@ -1,0 +1,172 @@
+---
+title: "Write clearer functions in R using quasiquotation"
+author: "Joseph Powers"
+date: '2018-11-17'
+categories: [functions, nonstandard evaluation]
+image: "air_quotes.png"
+draft: false
+warning: false
+message: false
+---
+
+```{r setup, cache=F, include=FALSE}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+```{r echo=FALSE, fig.align='center'}
+knitr::include_graphics("https://media.giphy.com/media/qs6ev2pm8g9dS/giphy.gif")
+```
+
+# TLDR
+The functions in `dplyr`, `tidyr`, and `ggplot2` handle their arguments differently than most R functions, and this can complicate writing your own custom functions. However, if you know when to use quasiquotation functions like `enquo()` & `!!`, you can quickly write very powerful custom functions that take full advantage of `dplyr`, `tidyr`, and `ggplot2`. This post demonstrates standard use cases for writing custom functions that leverage `enquo()` & `!!`, `enquos()` & `!!!`, `quo_name()` and the helper function `:=`, which is godsend for naming new variables inside of custom functions. 
+
+# Why use quasiquotation?
+I'll assume that readers of this post rely on `dplyr` & `tidyr` for data manipulation, but have experienced some frustration when trying to turn their best data manipulation scripts into custom functions that rely on `dplyr` and `tidyr` verbs. Quasiquotation can relieve that pain.
+
+I'll start by making a small dataframe `ds_mt` for demonstration purposes.
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+
+ds_mt <- mtcars %>% select(cyl) %>% slice(1:5)
+```
+
+## A custom function with no `dplyr` verbs
+Now I'll write a very simple function, `double()`, that uses no `dplyr` verbs.
+```{r}
+double <- function(x){
+  x * 2
+}
+```
+
+In the function above, `x` is referred to as a `formal argument`. Formal arguments like `x` map to `calling argument(s)` supplied by the user such as `3` & `ds_mt$cyl` in the chunk below. This distinction will be important to avoid confusion later on. 
+
+```{r}
+double(3) # same as double(x = 3)
+double(x = ds_mt$cyl) # same as double(ds_mt$cyl)
+```
+
+Our function `double()` can be used within a `dplyr` function like `mutate()` ... 
+```{r}
+ds_mt %>% mutate(cyl_2 = double(cyl))
+```
+
+... but if we write a new version of `double()` called `double_dplyr` that has `dplyr` verbs inside, then mapping to our arguments gets more complicated. 
+
+## A custom function utilizing `dplyr` verbs
+Notice how the function below, `double_dplyr()`, fails to find `cyl` within our data `ds_mt`:
+```{r}
+double_dplyr <- function(data, x){
+  data %>% 
+    mutate(new_var = x * 2)
+}
+
+ds_mt %>% double_dplyr(x = cyl)
+```
+
+In order for our new function, `double_dplyr()`, to successfully map its arguments, we need to utilize quasiquotation inside the guts of the function. 
+
+**Note**: I am not going to get into the weeds of [quasiquotation](https://adv-r.hadley.nz/quasiquotation.html), [tidyeval](https://www.rstudio.com/resources/webinars/tidy-eval/), and [nonstandard evaluation](https://cran.r-project.org/web/packages/dplyr/vignettes/programming.html) in this post. The internet has covered these topics in great detail already. This post is a demonstration of everyday use cases for using quasiquotation to write clear and reliable functions. 
+
+# Writing custom functions with quasiquotation
+I have read up on quasiquotation in detail, and for brief moments felt like I understood it. But when I am writing functions that utilize quasiquotation I prefer to think of this fairy tale:
+
+```{r echo=FALSE, fig.align='center'}
+knitr::include_graphics("https://media.giphy.com/media/tpTOw6sljB2U/giphy.gif")
+#https://media.giphy.com/media/tpTOw6sljB2U/giphy.gif
+```
+
+The calling arguments users supply to your function are like genies: Magic, but dangerous to have floating around loose inside the function. `enquo()` traps the genie in the bottle for safe transport, and `!!` rubs the bottle to let him out and grant your wishes. 
+```{r}
+double_dplyr <- function(data, x){
+  x <- enquo(x)
+  data %>% 
+    mutate(new_var = !!x * 2)
+}
+
+ds_mt %>% double_dplyr(x = cyl)
+```
+
+The above function now works fine, but the name of the new variable `new_var` is hard-wired into the guts of the function, and is not an informative name to have by default. 
+
+A better written function would enable the user to name the new variable as they see fit...
+```{r}
+double_dplyr <- function(data, x, new_var){
+  x <- enquo(x)
+  new_var <- enquo(new_var)
+  
+  data %>% 
+    mutate(!!new_var = !!x * 2)
+}
+```
+
+... but now the above function does not work. The code breaks at the "=" sign. 
+
+Naming `new_var` as a string will not help either. Because in this context `mutate()` is not going to look for the calling argument that `new_var` maps to. In this context `mutate()` will create a new variable named `new_var` rather than "cyl_2". 
+```{r}
+double_dplyr <- function(data, x, new_var){
+  x <- enquo(x)
+  new_var <- enquo(new_var)
+  
+  data %>% 
+    mutate(new_var = !!x * 2)
+}
+
+ds_mt %>% double_dplyr(x = cyl, new_var = "cyl_2")
+```
+
+The solution is to use `enquo()` and `!!` in combination with a helper function `:=` instead of `=` inside of `mutate()`. 
+```{r}
+double_dplyr <- function(data, x, new_var){
+  x <- enquo(x)
+  new_var <- enquo(new_var)
+  
+  data %>% 
+    mutate(!!new_var := !!x * 2)
+}
+
+ds_mt %>% double_dplyr(x = cyl, new_var = cyl_2)
+```
+
+Even better we can write the function to automatically generate a name for the new variable by using `quo_name()` can convert expressions to strings.
+```{r}
+double_dplyr <- function(data, x){
+  x <- enquo(x)
+  new_var <- paste0(quo_name(x), "_2")
+  
+  data %>% 
+    mutate(!!new_var := !!x * 2)
+}
+
+ds_mt %>% double_dplyr(x = cyl)
+```
+
+## Bonus Material: 
+And just because it took me so long to figure out, I'll include an example that utilizes a formal argument (e.g., `groups`) that can handle multiple calling arguments, and `...`, which allows you to pass optional arguments like "na.rm = TRUE" to nested calls within your function. 
+```{r}
+mean_by_group <- function(data, x, groups, ...){
+  x <- enquo(x)
+  grp_mean <- paste0(quo_name(x), "_mean")
+  
+  groups <- enquos(groups)
+  
+  data %>% 
+    group_by_at(vars(!!!groups)) %>% 
+    summarise(
+      !!grp_mean := mean(!!x, ...)
+    )
+}
+
+# Example using groups with multiple arguments
+mtcars %>% mean_by_group(x = mpg, groups = c(am, cyl), na.rm = TRUE)
+
+# Example using groups with a single argument
+mtcars %>% mean_by_group(x = mpg, groups = cyl, na.rm = TRUE)
+```
+
+# Conclusion: 
+If you know when to use `enquo()`and `!!` you can use dplyr verbs inside custom functions that are simple to call and easy to understand.    
+
+# Resources & Credits
+[Functions Chapter in Advanced R](http://adv-r.had.co.nz/Functions.html) for more information on argument vocabulary and mapping defaults. 
+
+Hat tip to @[akrun](https://stackoverflow.com/questions/53160709/pass-multiple-calling-arguments-to-a-formal-argument-in-dplyr-custom-function-wi/53160726#53160726) for informing me that `group_by_at()` can handle one or many grouping arguments inside a custom function. 

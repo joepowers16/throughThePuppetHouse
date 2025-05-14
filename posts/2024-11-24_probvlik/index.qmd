@@ -1,0 +1,355 @@
+---
+title: "The Difference between Probability and Likelihood"
+author: "Joseph Powers"
+date: "2024-11-24"
+image: 'post.png'
+categories: [bayesian, hlm, mlm, modeling]
+draft: false
+warning: false
+message: false
+echo: true
+freeze: false
+---
+
+# TL;DR: 
+
+* Bayes Rule: $Posterior\ Probability \propto Likelihood\ *\ Prior\ Probability$
+
+* The **Likelihood** expresses the likelihood of different parameters for your sample of data. 
+
+* The **Prior Probability** express your prior beliefs about the probability that each of those parameters could be truly present. 
+
+* The **Prior Probability** is then conditioned on (AKA averaged with) the **Likelihood of the Data** to express your updated beliefs as a **Posterior Probability** distribution. 
+
+```{r}
+pacman::p_load(tidyverse, knitr, gt, scales, glue, brms, conflicted)
+
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::lag)
+conflicts_prefer(brms::ar)
+conflicts_prefer(scales::col_factor)
+conflicts_prefer(scales::discard)
+
+theme_set(theme_bw())
+
+lor_to_prob <- function(lor){exp(lor) / (1+exp(lor))}
+prob_to_lor <- function(prob){log(prob / (1-prob))}
+```
+
+```{r}
+set.seed(5)
+SIMS <- 1
+POST_SIMS <- 4e3
+RATE_A <- .65
+RATE_B <- .66
+TRIALS <- 10e3
+recipes <- c("A", "B")
+legend_levels <- c("Prior Beliefs", "Likelihood of Sample", "Posterior Beliefs")
+
+df <- 
+    tibble(
+        recipe = recipes,
+        trials = rpois(length(recipes), TRIALS),
+        theta = c(RATE_A, RATE_B)
+    ) |> 
+    rowwise() |>
+    mutate(events = rbinom(n=SIMS, size=trials, prob=theta)) |> 
+    ungroup() |> 
+    mutate(
+        rate = events/trials,
+        b_dtc = rate - lag(rate),
+        b_itc = rate/lag(rate))
+
+gt::gt(df) %>%
+  fmt_number(
+    columns = c(rate, b_dtc, b_itc),
+    decimals = 3
+  )
+```
+
+```{r fig.height=2, fig.width=6}
+X_LIMS <- c(-0.02,.06)
+Y_LIMS <- c(0, 110)
+
+p_pt <- 
+    df |> 
+    ggplot() + 
+    geom_point(aes(x=b_dtc, y=0), size=2) +
+    # geom_label(aes(label = percent(df$b_dtc[[2]], .1))) + 
+    coord_cartesian(xlim = X_LIMS, ylim = Y_LIMS) + 
+    labs(x = "Potential Parameters", title = "What you saw in your sample") + 
+    scale_x_continuous(
+        breaks = seq(-1,1,.01),
+        labels = percent
+    ) + 
+    labs(y = NULL) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p_pt
+```
+
+# What reality generated my sample? 
+Let's generate a 95% CI because 95% of CIs will contain the true parameter... which should sound worryingly different than what you practically want but what the hell, let's see it.  
+```{r}
+#| include: false
+#| echo: true
+
+se_rate_diff <- function(p1, p2, n1, n2){
+    se <- sqrt( (p1*(1-p1)) / n1 + (p2*(1-p2)) / n2 )
+    return(se)
+}
+
+SE_diff <- se_rate_diff(df$rate[[1]], df$rate[[2]], df$trials[[1]], df$trials[[2]])
+
+B_DTC <- df$b_dtc[[2]]
+
+ci_95 <- c(B_DTC-1.96*SE_diff, B_DTC+1.96*SE_diff)
+```
+
+```{r}
+p_se <- p_pt + 
+    geom_errorbarh(aes(y=0, xmin = ci_95[[1]], xmax = ci_95[[2]]), height=5) + 
+    labs(
+        x = "Potential Parameters",
+        title = "Mean Diff and 95% CI", 
+        subtitle = "Are all values within that CI equally likely to be the parameter?") + 
+    labs(y = NULL) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p_se
+```
+
+# How often would each potential reality generate my sample? 
+```{r}
+df_dtc_lik <- 
+    tibble(
+        x = seq(X_LIMS[[1]], X_LIMS[[2]], length.out = POST_SIMS),
+        y = dnorm(x = B_DTC, mean = x, sd = SE_diff), 
+        dist = "Likelihood of Sample"
+    )
+
+p_se + 
+    geom_line(data=df_dtc_lik , aes(x=x, y=y)) +
+    labs(
+        x = "Potential Parameters for the Sample Delta",
+        y = "Likelihood that Parameter\nGenerated the Sample Delta"
+    )
+```
+
+```{r include=FALSE}
+df_b_dtc_post <- 
+    df |> 
+    select(b_dtc) |> 
+    drop_na() |> 
+    mutate(post_dtc = list(rnorm(4e3, mean=b_dtc, sd = SE_diff))) |> 
+    unnest(post_dtc)
+
+p_se + 
+    geom_density(data=df_b_dtc_post, aes(x = post_dtc)) + 
+    labs(
+        x = "Potential Parameters for My Sample Rate", 
+        y = "Likelihood of Parameter Generating Sample",
+        title = str_wrap("Mean difference, 95% CI, and Likelihood that different sources would generate my sample rate", 65), 
+        subtitle = str_wrap(glue("Do you believe that the tails of your 95% CI ({percent(ci_95[[1]], .1)} vs {percent(ci_95[[2]], .1)}) are equally likely to be the parameter?")))
+```
+
+Do you believe that the tails of your 95% CI (`r percent(ci_95[[1]], .1)` vs `r percent(ci_95[[2]], .1)`) are equally likely to be the parameter?" Of course not, in most business settings, an effect of `r percent(ci_95[[1]], .1)` is 100x more likely to be true than an effect of `r percent(ci_95[[2]], .1)`. So we need to incorporate this knowledge into the model that expresses our beliefs. 
+
+```{r}
+# Express your prior beliefs
+PRIOR_MU_INTERCEPT <- 0.64
+PRIOR_SD_INTERCEPT <- 0.025
+PRIOR_SD_DTC <- 0.005
+```
+
+
+```{r}
+#| include: false
+#| echo: false
+df_prior <- tibble(
+    b_dtc_prior = rnorm(POST_SIMS, mean=0, sd=PRIOR_SD_DTC)
+)
+
+p_prior <- df_prior |> 
+    ggplot(aes(x=b_dtc_prior)) + 
+    geom_density(linetype = 'dashed') + 
+    scale_x_continuous(
+        breaks = seq(-1,1,.01),
+        labels = percent
+    ) +
+    coord_cartesian(xlim=X_LIMS, ylim = Y_LIMS) + 
+    labs(title = "My Prior Beliefs about the probability of different treatment deltas",
+        x = "Potential True Deltas",
+        y = "Prior Probability of Such Deltas"
+        ) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p_prior
+```
+
+```{r}
+df_prior_cont <- tibble(
+    x = seq(-.02, .06, length.out = POST_SIMS),
+    y = dnorm(x, mean=0, sd=PRIOR_SD_DTC),
+    dist = "Prior Beliefs"
+)
+
+p_prior <- 
+    df_prior_cont |> 
+    ggplot(aes(x=x, y=y)) + 
+    geom_line(linetype = 'dashed') + 
+    scale_x_continuous(
+        breaks = seq(-1,1,.01),
+        labels = percent
+    ) +
+    coord_cartesian(xlim=X_LIMS, ylim = Y_LIMS) + 
+    labs(title = "My Prior Beliefs about the probability of different treatment deltas",
+        x = "Probable Parameters",
+        y = "Prior Probability that\neach Parameter is Real"
+        ) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p_prior
+```
+
+
+```{r}
+p_prior_pt <- 
+    p_prior + 
+    geom_point(data=df, aes(x=b_dtc, y=0), size=2) + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p_prior_pt
+```
+
+```{r}
+my_formula <- "events | trials(trials) ~ 0 + Intercept + recipe"
+
+get_prior(
+    my_formula,
+    family = binomial,
+    data = df
+)
+```
+
+
+```{r}
+# Convert prior probabilities to log-odds ratios for logistic regression
+PRIOR_MU_INTERCEPT_LOR <- prob_to_lor(PRIOR_MU_INTERCEPT)
+PRIOR_SD_INTERCEPT_LOR <- prob_to_lor(PRIOR_MU_INTERCEPT + PRIOR_SD_INTERCEPT) - prob_to_lor(PRIOR_MU_INTERCEPT)
+PRIOR_SD_DTC_LOR <- prob_to_lor(PRIOR_MU_INTERCEPT + PRIOR_SD_DTC) - prob_to_lor(PRIOR_MU_INTERCEPT)
+
+my_priors <- 
+    prior(normal(PRIOR_MU_INTERCEPT_LOR, PRIOR_SD_INTERCEPT_LOR), class = b, coef = Intercept) + 
+    prior(normal(0, PRIOR_SD_DTC_LOR), class = b, coef = recipeB)
+
+my_stanvars <- c(
+    stanvar(PRIOR_MU_INTERCEPT_LOR, name = "PRIOR_MU_INTERCEPT_LOR"),
+    stanvar(PRIOR_SD_INTERCEPT_LOR, name = "PRIOR_SD_INTERCEPT_LOR"),
+    stanvar(PRIOR_SD_DTC_LOR, name = "PRIOR_SD_DTC_LOR")
+)
+
+fit_informed <- brm(
+    formula = my_formula,
+    data = df,
+    family = binomial,
+    prior = my_priors, 
+    stanvars = my_stanvars, 
+    cores = 4,
+    seed = 44,
+    file = 'fits/fit_informed.rds'
+)
+```
+
+```{r}
+draws_informed <- as_draws_df(fit_informed)
+
+head(draws_informed)
+```
+
+```{r}
+df_post_informed <- 
+    draws_informed |> 
+    mutate(
+        post_dtc = lor_to_prob(b_Intercept + b_recipeB) - lor_to_prob(b_Intercept), 
+        dist = "Posterior Beliefs",
+        dist = factor(dist, levels = legend_levels)
+    ) 
+
+ATE <- median(df_post_informed$post_dtc)
+PR_LOSS <- mean(df_post_informed$post_dtc < 0)
+MEAN_LOSS_LOSS <- mean(df_post_informed$post_dtc[df_post_informed$post_dtc < 0])
+E_LOSS <- PR_LOSS * MEAN_LOSS_LOSS
+```
+
+
+```{r}
+my_breaks <- RATE_B-RATE_A
+my_labels <- glue("True Delta\n= {percent(my_breaks, 1L)}")
+
+my_linetypes <- c("dashed", "solid", "solid")
+names(my_linetypes) <- c("Prior Beliefs", "Likelihood of Sample", "Posterior Beliefs")
+
+my_fill <- c("red", "green", "lightblue")
+names(my_fill) <- c("Prior Beliefs", "Likelihood of Sample", "Posterior Beliefs")
+
+bind_rows(
+    df_dtc_lik, 
+    df_prior_cont
+    ) |> 
+    mutate(dist = factor(dist, levels = legend_levels)) |> 
+    ggplot(aes(linetype = dist, fill=dist)) + 
+    geom_line(aes(x=x, y=y)) + 
+    geom_density(data=df_post_informed, aes(x=post_dtc), alpha=.75, color = "lightblue", alpha=.75) + 
+    scale_linetype_manual(values = my_linetypes) +
+    scale_fill_manual(values = my_fill) + 
+    scale_x_continuous(
+        breaks = seq(-1,1,.01),
+        labels = percent,
+        sec.axis = 
+            dup_axis(
+                breaks = my_breaks,
+                labels = my_labels,
+                name = NULL
+            )
+    ) + 
+    labs(
+        title = "I can update my prior beliefs with the likelihood of my sample data",
+        x = "Potential Parameters", y = "Likelihood that Parameter is Real", fill = "Distribution", linetype = "Distribution") + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank())
+```
+```{r include=FALSE, echo=FALSE}
+bind_rows(
+    df_dtc_lik, 
+    df_prior_cont
+    ) |> 
+    mutate(dist = factor(dist, levels = legend_levels)) |> 
+    ggplot(aes(linetype = dist, fill=dist)) + 
+    geom_line(aes(x=x, y=y)) + 
+    geom_density(data=df_post_informed, aes(x=post_dtc), alpha=.75, color = "lightblue", alpha=.75) + 
+    scale_linetype_manual(values = my_linetypes) +
+    scale_fill_manual(values = my_fill) + 
+    scale_x_continuous(
+        breaks = seq(-1,1,.01),
+        labels = percent,
+        sec.axis = 
+            dup_axis(
+                breaks = my_breaks,
+                labels = my_labels,
+                name = NULL
+            )
+    ) + 
+    labs(
+        title = NULL,
+        x = "Potential Parameters", y = "Likelihood that Parameter is Real", fill = "Distribution", linetype = "Distribution") + 
+    theme(axis.ticks.y = element_blank(), axis.text.y = element_blank()) + 
+    theme(legend.position = "none")
+
+ggsave('post.png')
+```
+
+
+```{r}
+sessionInfo()
+```
+

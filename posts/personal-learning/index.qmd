@@ -1,0 +1,51 @@
+---
+title: "Personal Learning"
+author: "Joseph Powers"
+date: "2024-03-24"
+categories: [simulation, learning, data simulation, modeling]
+image: "mask.png"
+draft: true
+warning: false
+message: false
+---
+
+In a recent interview Rick Rubin discussed how ~"local optimum is not the global optimum." And this this had two implications: 
+
+1. Even when you've hit your best yet, you need to keep exploring for better ways. 
+
+2. when giving advice or taking advice, you need to be aware that what worked for someone else in their circumstances may not work for you in yours. 
+
+There is so much to unpack here, but I want to focus on how is speaks to the very personal nature of optimal learning. Learning how we learn is a very personal and lifelong quest, one that easily gets short stopped in local optima. And one tragedy is how the idea of personal learning has been co-opted by "learning styles." As though the nuances of how you learn can be generalized into a simple bucket: "I'm a visual learner," which is about as accurate and useful as stating, "I'm a Chevy guy."
+
+The personal learning I am speaking about is one of reflection, experimentation, and model building, building a model of how you learn, a model that can be put into practice with demonstrably better outcomes for your own development. I'll give an example. 
+
+I cannot learn efficiently from semester length courses. I am not an anomoly. The semester length course is developed to accomodate several assumptions that are not relevant to me: Free time, an academic schedule, and prerequisite knowledge. I lack all three in many cases, such that even when I put in the time, I lack the prerequisite knowledge and am simply nailing jello to a wall made of jello. I spent years trying to learn Bayesian statistics this way: Taking coursera courses or reading whole books end to end. Then I reflected: I am not making progress here, but I am making progress in other areas where I am trying to learn. What is different between those areas? I noticed that size, clarity, and deadlines were very different. In an area where I'd enjoyed success my learning goals tended to be narrow, focused and timely, e.g., gain read/write access between local IDE and Google Sheets by Nov-1 to automate an upcoming report. 
+
+I quickly tried applying this to my Bayesian learning efforts: 
+
+* Learn Bayesian Modeling --> Use a Bayesian model to AB test a Rate by Mar-1
+
+It worked! And this initial success became a toe-hold for extensive further learning of Bayesian statistics. My next goal became:
+
+* Use a Bayesian model to AB test a continuous metric by Apr-1
+
+* Then power analysis, multi-variable models. 
+
+# Transition
+It is not my goal to argue that my method above it the globally optimal way to learn statistics or to learn Bayesian modeling. I am arguing that this worked dramatically better for me than attempting semester-long courses or reading books end-to-end. I believe that this worked better for me because I 
+
+* I have a full-time job and a family, so I cannot make regular time that is assumed by a semester-length course, and I often lack many of the prerequisite skills that are required to maintain the pace of the course.
+
+* Books are typically comprehensive, I doubt their authors even intend for their books to be digested in an end-to-end fashion. 
+
+* While I lack the regular time of an undergrad or masters student, I have the advantage of pressing practical applications for the methods I am struggling to learn and I have the flexibility to dive deep when I stumble upon an unmet prerequisite. 
+
+    * The practical applications tied to 
+
+# another trick
+
+* I'll offer another hack: Using simulation rather than mathematical understanding. 
+
+David Hume said ...
+
+There is something fundamentally different about learning thorugh simulation: You actually get teh level of repetitive feedback that shapes your expectations. 

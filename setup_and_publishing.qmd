@@ -1,0 +1,28 @@
+---
+title: "setup"
+editor: source
+---
+
+# Publishing
+`quarto render`
+then
+`quarto publish --no-prompt`
+although `quarto render` may have been superflous
+
+# Setup
+https://quarto.org/docs/websites/website-blog.html#:\~:text=To%20create%20a%20new%20blog%20project%20within%20RStudio%2C%20use%20the,right%20of%20the%20source%20file.
+
+# Publishing
+execute `quarto publish` in the terminal, and then click `Enter` to publish to your website.
+
+# (Un)Freezing
+I often need to delete folders in the _freeze directory in order for updates to appear in previously published posts. 
+
+# your blog will be visible at
+https://joepowers16.quarto.pub/throughthepuppethouse/
+
+`quarto preview` works
+
+`quarto render`
+
+`quarto publish --no-prompt`

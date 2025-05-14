@@ -1,0 +1,21 @@
+---
+title: "Taste"
+author: "Joseph Powers"
+date: "2024-04-21"
+image: 'post.png'
+categories: [bayesian, hlm, mlm, modeling]
+draft: true
+warning: false
+message: false
+echo: false
+freeze: false
+code-fold: true
+---
+
+A close friend reached out last month with a a link to an Ezra Klein podcast about *taste,* and it really lit a fire under me. It's a theme I now notice (and actively seek out) everywhere since hearing the podcast. Taste is acknowledging what you like and then cultivating or seeking out experiences that deliver more of what you like. Taste is not emulating that preferences of your betters. 
+
+Ira Glass
+
+Rick Rubin
+
+George Saunders

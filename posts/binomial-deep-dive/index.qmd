@@ -1,0 +1,235 @@
+---
+title: "Binomial Deep Dive"
+author: "Joseph Powers"
+date: "2023-12-16"
+categories: [simulation, learning, data simulation, modeling, binomial]
+image: "roman_roads.png"
+draft: false
+warning: false
+message: false
+---
+
+```{r}
+pacman::p_load(glue, scales, tidyverse)
+
+breadcrumbs::source_directory(here::here('R'))
+```
+
+# The Binomial Distribution
+Binomial distributions are rampant, and their initial simplicity can belie complexities that I will probe in this post.
+
+$$Binomial(k, p)$$
+$$k = trials\ per\ sample$$
+$$p = Pr(success\ event\ on\ each\ trial)$$
+
+$$Binomial(k=1e4,\ p=.75)$$
+
+It's worth emphasizing some vocabulary: 
+
+* a **parameter** summarizes an underlying truth (usually unknowable except when performing simulations). E.g., My customers have a 75% probability of converting. 
+
+* a **statistic** summarizes a sample of observable data. E.g., 74.2% of my customers converted last month. 
+
+* in a sense, **parameters** generate samples that can be summarized by **statistics**, and the generation process has some interesting propperties.  
+
+I'll specify two parameters for a Binomial distribution: 
+```{r}
+K <- 1e3
+P <- 0.75
+```
+
+Given these parameters, what range of stats might I expect in my samples from the distribution $Binomial(k=1e4,\ p=0.75)$? 
+
+### rbinom()
+A really simple way to address this question is with `rbinom()`.
+```{r}
+set.seed(42)
+
+rbinom(n=1, size=K, prob=P)
+```
+
+If I run the same code again I will get a different sample.
+```{r}
+rbinom(n=1, size=K, prob=P)
+```
+
+I can also run this as a series of Bernoulli trials
+```{r}
+set.seed(45)
+
+my_bernoulli <- rbinom(n=K, size=1, prob=P)
+
+my_bernoulli[1:10]
+```
+
+The Bernoulli is a special case of the Binomial ($Bernoulli(p=0.75) = Binomial(k=1,\ p=0.75)$), and the sum of the $k$ Bernoulli trials would represent the outcome for one Binomial sample with $k$ trials. 
+```{r}
+sum(my_bernoulli)
+```
+
+There are enormous efficiencies to be gained from using Binomial distribution rather than the Bernoulli when simulating thousands or millions of samples. But know that the results would converge. 
+
+```{r}
+N <- 4e3 # samples to simulate
+```
+
+So now I will simulate `r N` samples from $Binomial(k=1e4, p=0.75)$
+```{r}
+sim_events <- rbinom(n=N, size=K, prob=P)
+```
+
+rbinom() just outputs a long vector of event tallies. Let's look at 10. 
+```{r}
+sim_events[1:10]
+```
+
+The full vector of sample stats is easier to visualize in a plot
+```{r}
+tibble(sim_events) |> 
+    ggplot(aes(x = sim_events)) + 
+    geom_histogram(bins=200)
+```
+
+So we can see that the distribution $Binomial(1e4, 0.75)$ generated samples with `r format_range(sim_events)` events. We could describe this range of potential samples further:
+```{r}
+paste0('mean = ', mean(sim_events) |> round(3))
+paste0('SEM = ', sd(sim_events) |> round(3))
+quantile(sim_events, c(0.025, 0.975))
+```
+
+So `rbinom()` will output a tally of events, but often we are more interested in the rate this represents.  
+```{r}
+sim_rates <- sim_events / K
+
+paste0('mean = ', mean(sim_rates)  |> round(3))
+paste0('SEM = ', sd(sim_rates) |> round(5))
+quantile(sim_rates, c(0.025, 0.975))
+```
+
+You should note above that I have computed the Standard Error of the Mean using `sd(sim_rates)` because `sim_rates` actually represents a *sampling distribution*. `sim_rates` is a sample of samples ... and so the Central Limit Theorum kicks in to ensure 
+
+* it approximates normality regardless that the raw data is not normal (the raw data are 0s and 1s), 
+
+* its mean approximates the true parameter mean of `r P`
+
+* the standard deviation of the sampling distribution is the standard error of the mean
+
+Normally you would have tried to mathematically estimate such results from just one real sample: 
+```{r}
+# grab just one random sample
+rate1 <- sim_rates[[18]]
+
+# std dev of binomial data is sqrt(p*(1-p))
+sd1 <- sqrt(rate1 * (1-rate1))
+
+# convert std dev to SEM
+se1 <- sd1 / sqrt(K)
+
+se1 |> round(5)
+```
+
+That's pretty cool how close we can estimate the standard error with just one sample. 
+
+## Summary: 
+So we've just simulated some data using `rbinom()` and explored its properties. 
+
+# dbinom()
+`rbinom()` can generate simulated data and I find its results to be very intuitive. Density (`dbinom()`) eluded my intuition for an embarrassingly long time. Until I saw how the results converged with `rbinom()`.
+
+Using the same distribution $Binomial(1e4, 0.75)$, let's first consider the range of stats that we could observe. In `r comma(K)` trials I can only observe between 0 & `r comma(K)` events, so this defines my range of observable stats. 
+```{r}
+range_of_event_tallies <- 0:K
+```
+
+Of course, some of those stats are more likely to manifest in a sample than others. If I have a true underlying success rate of `r percent(P)` this could more readily manifest as 748 events than it could manifest as 992 events in a sample of 1000 trials. 748 events certainly feels more likely, even though 992 events is not impossible. 
+
+We can use the `dbinom()` function to return the likelihood of each possible event tally from $Binomial(1e4, 0.75)$.
+```{r}
+likelihood_of_event_tallies <- 
+    dbinom(
+        range_of_event_tallies,
+        size = K,
+        prob = P
+    )
+```
+
+
+```{r}
+df_density <- 
+    tibble(
+        range_of_event_tallies,
+        likelihood_of_event_tallies
+    )
+
+df_density |> 
+    ggplot(aes(x = range_of_event_tallies, y = likelihood_of_event_tallies)) + 
+    geom_line() + 
+    labs(
+        title = str_wrap(glue('Samples from Binomial({K}, {P}) cover a pretty narrow range centered around {K*P} events'), 65)
+    )
+```
+
+As we said earlier, it's usually easier to think about these stats in terms of rates rather than tallies, so we'll just divide the event_tallies by the trial count (`K`).
+```{r}
+df_density <- 
+    df_density |> 
+    mutate(range_of_sample_rates = range_of_event_tallies / K)
+
+p_rate <- 
+    df_density |> 
+    ggplot(aes(x = range_of_sample_rates, y = likelihood_of_event_tallies)) + 
+    geom_line() + 
+    scale_x_continuous(labels = percent) + 
+    labs(
+        title = str_wrap(glue('Samples from Binomial({K}, {P}) cover a pretty narrow range centered around {percent(P)}'), 65)
+    )
+
+p_rate
+```
+
+```{r}
+p_rate + 
+    coord_cartesian(xlim = c(.7, .8)) + 
+    labs(title = str_wrap("Zooming in I can eyeball that about 95% of potential samples will fall between 72.5% & 77.5%"))
+```
+
+But don't take my word for it. Let's see where the 2.5% and 97.5%-iles of this distribution fall. 
+```{r}
+ci95_events <- qbinom(c(0.025, 0.975), K, P)
+
+ci95_rates <- ci95_events / K
+
+ci95_rates
+```
+
+Not bad.
+
+Now for the kicker: We can arrive at nearly these same values through simulation or density functions. Let's revisit our simulated sampling distribution `sim_rates`:
+```{r}
+quantile(sim_rates, c(0.025, 0.975))
+```
+
+Tell me you don't have goose bumps!
+
+# All roads lead to Rome:
+```{r}
+df_sim <- 
+    tibble(range_of_sample_rates = sim_rates) |> 
+    count(range_of_sample_rates) |> 
+    mutate(prop = n / sum(n))
+
+# this join works very well to create a double y-axis
+left_join(df_density, df_sim, by = 'range_of_sample_rates') |> 
+    ggplot(aes(x = range_of_sample_rates, y = likelihood_of_event_tallies)) + 
+    geom_col(aes(x=range_of_sample_rates, y=prop)) + 
+    geom_line(color = 'red', linewidth=1) + 
+    scale_x_continuous(
+        breaks = pretty_breaks(10),
+        labels = ~percent(.x,1)
+        ) + 
+    labs(
+        x = "Potential Sample Rates",
+        y = "Likelihood of Sample Rate",
+        title = str_wrap("Note the convergence of rbinom()'s histogram and dbinom()'s line"), 65) + 
+    coord_cartesian(xlim = c(.7,.8))
+```

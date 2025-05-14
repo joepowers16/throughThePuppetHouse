@@ -1,0 +1,20 @@
+---
+title: "communal_coffee_hillcrest"
+author: "Joseph Powers"
+date: "2024-11-03"
+image: 'post.png'
+categories: [uncategorized]
+draft: true
+warning: false
+message: false
+echo: true
+freeze: false
+code-fold: true
+---
+
+```{r}
+pacman::p_load(tidyverse, glue, scales)
+theme_set(theme_bw())
+```
+
+This was a surreal morning. Communal Coffee has a really nice decor and vibe. The chairs are 6/10 comfortable which means not comfortable but not inducing a back spasm. The surreal aspect is that inside the cafe everyone is good, but the people watching outside is horrific. There are multiple homeless people experiencing severe psychosis. One is stick fighting with imaginary attackers and this is on full view through the ample ceiling high windows facing University Ave. Another has just shattered his Quart of beer on the side walk. No one cares. The staff are not reacting. I am not reacting. I am unlikely to return to this cafe. I will just ignore this and am thereby complicit. 

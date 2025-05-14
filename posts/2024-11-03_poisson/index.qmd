@@ -1,0 +1,78 @@
+---
+title: "poisson"
+author: "Joseph Powers"
+date: "2024-11-03"
+image: 'post.png'
+categories: [uncategorized]
+draft: true
+warning: false
+message: false
+echo: true
+freeze: false
+code-fold: true
+---
+
+```{r}
+pacman::p_load(tidyverse, glue, scales)
+theme_set(theme_bw())
+```
+
+# Poisson
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Number of observations
+n <- 1000
+
+# Generate predictor variables
+x1 <- rnorm(n)
+x2 <- runif(n)
+
+# Set coefficients
+beta0 <- 1.5
+beta1 <- 0.5
+# beta2 <- -0.8
+
+# Calculate linear predictor
+eta <- beta0 + beta1*x1 #+ beta2*x2
+
+# Calculate lambda (mean of Poisson distribution)
+lambda <- exp(eta)
+
+# Generate Poisson distributed response variable
+y <- rpois(n, lambda)
+
+# Create data frame
+sim_data <- data.frame(y = y, x1 = x1)#, x2 = x2)
+
+# Fit Poisson regression model
+model <- glm(y ~ x1, family = poisson, data = sim_data)
+
+# View model summary
+summary(model)
+```
+
+```{r}
+df_new = tibble(x1 = seq(-10,10,length.out=4e3))
+df_new <- df_new |>  
+    modelr::add_predictions(model, 'log_n') |> 
+    mutate(n = exp(log_n))
+
+# View the first few rows of the update
+head(df_new)
+```
+
+```{r}
+df_new |>
+    ggplot(aes(x1, y=log_n)) + 
+    geom_line()
+```
+
+```{r}
+df_new |>
+    ggplot(aes(x1, y=n)) + 
+    geom_line() + 
+    scale_x_continuous(breaks = -10:10)
+```
+

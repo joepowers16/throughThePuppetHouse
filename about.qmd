@@ -1,0 +1,19 @@
+---
+title: "About"
+image: profile.png
+about:
+  template: jolla
+  links:
+    - icon: twitter
+      text: Twitter
+      href: https://twitter.com/joepowers16
+    - icon: linkedin
+      text: LinkedIn
+      href: https://www.linkedin.com/in/joseph-t-powers/
+    - icon: github
+      text: Github
+      href: https://github.com/joepowers16
+
+---
+
+This blog is a place for me to share and explore topics of interest, mostly stats and programming ... maybe gardening and woodworking when I get ambitious.  
