@@ -1,0 +1,362 @@
+---
+title: "Validation by Simulation"
+author: "Joseph Powers"
+date: "2024-11-24"
+image: 'post.png'
+categories: [bayesian, hlm, mlm, modeling]
+draft: true
+warning: false
+message: false
+echo: true
+freeze: false
+---
+
+```{python}
+import numpy as np
+import polars as pl
+from polars import col, lit
+import polars.selectors as cs
+import mizani.labels as ml
+import mizani.formatters as mf
+import scipy.stats as stats
+from plotnine import * 
+
+theme_set(theme_bw())
+```
+
+
+```{python}
+np.random.seed(42)
+TRIALS = int(1e3)
+
+COMPLETE_RATE_A = 0.25
+TAU_A = 1 - COMPLETE_RATE_A
+SHAPE_A = 5
+SCALE_A = 10
+RATE_A = 1 / SCALE_A
+
+
+
+pl_a = pl.DataFrame({
+    "variant": "A",
+    "complete": np.random.binomial(1, COMPLETE_RATE_A, TRIALS),
+    "potl_rev": np.random.gamma(shape = SHAPE_A, scale = SCALE_A, size = TRIALS)
+}).with_columns(
+    (col("complete") * col("potl_rev")).alias("rev")
+)
+
+pl_a.head()
+```
+
+```{python}
+(
+    ggplot(
+        pl_a.unpivot(cs.numeric(), index="variant"), 
+        aes("value")) + 
+    geom_histogram() + 
+    facet_grid("~variable", scales="free_x") + 
+    theme(panel_grid = element_blank()) + 
+    labs(title = "Distributions of customer level outcomes")
+)
+```
+
+```{python}
+pl_rev_a = pl_a.unpivot(cs.numeric(), index="variant").filter(col("variable")=="rev")
+MEAN_REV_A = pl_rev_a.select(col("value").mean().alias("mean")).item()
+MEAN_REV_A_USD = ml.label_currency()( [MEAN_REV_A] )[0]
+
+(
+    ggplot(
+        pl_rev_a, 
+        aes("value")) + 
+    geom_histogram() + 
+    facet_grid("~variable", scales="free_x") + 
+    theme(panel_grid = element_blank()) + 
+    labs(x = "revenue", title = "Distribution of Customer Revenue") + 
+    geom_vline(xintercept = MEAN_REV_A, linetype = "dashed") + 
+    annotate("label", x=MEAN_REV_A, y=850, label=f"Mean Rev\n= {MEAN_REV_A_USD}", color="black", size=12) + 
+    coord_cartesian(ylim = [0,900])
+)
+```
+
+
+```{python}
+pl_sem_a = pl_rev_a.select(
+    col("value").mean().alias("mean_rev"),
+    col("value").std().alias("sd_rev"),
+    col("value").count().alias("n"),
+).with_columns(
+    (col("sd_rev") / col("n").sqrt()).alias("sem")
+)
+
+pl_sem_a
+```
+
+
+```{python}
+pl_samp_dist_rev_a = pl.DataFrame({
+    "mean_rev": np.random.normal(
+        loc = pl_sem_a["mean_rev"], 
+        scale = pl_sem_a["sem"],
+        size = int(10e3))
+})
+
+MEAN_REV_A = pl_sem_a["mean_rev"].round(2).item()
+SEM_REV_A = pl_sem_a["sem"].round(2).item()
+
+(
+    ggplot(pl_samp_dist_rev_a, aes("mean_rev")) + 
+    geom_histogram() + 
+    labs(title = f'Sampling Distribution from Normal({MEAN_REV_A}, {SEM_REV_A})')
+)
+```
+
+Now I think it is important to keep in mind that the standard error for A is one that is computed from the raw data and will thereby have more volatility. 
+
+
+```{python}
+import numpy as np
+
+def zigamma_mean_se(pi, shape, scale, n):
+    """
+    Compute mean and standard error of a zero-inflated gamma distribution.
+    
+    Parameters:
+        pi (float): Probability of zero (0 <= pi < 1)
+        shape (float): Gamma shape parameter (alpha)
+        scale (float): Gamma scale parameter (beta)
+        n (int): Sample size
+        
+    Returns:
+        mean (float): Mean of the zero-inflated gamma
+        se (float): Standard error of the mean
+    """
+    # Mean of gamma
+    mu = shape * scale
+
+    # Mean of zero-inflated gamma
+    mean = (1 - pi) * mu
+
+    # Variance of zero-inflated gamma
+    var = (1 - pi) * shape * scale**2 + (1 - pi) * pi * mu**2
+
+    # Standard error of the mean
+    se = np.sqrt(var / n)
+    
+    return mean, se
+
+zi_mean_a, zi_se_a = zigamma_mean_se(TAU_A, SHAPE_A, SCALE_A, TRIALS)
+print(f"Mean: {zi_mean_a:.4f}")
+print(f"Standard Error: {zi_se_a:.4f}")
+```
+
+
+```{python}
+pl_samp_dist_rev_a = pl.DataFrame({
+    "mean_rev": np.random.normal(
+        loc = zi_mean_a, 
+        scale = zi_se_a,
+        size = int(10e3))
+})
+
+MEAN_REV_A = pl_sem_a["mean_rev"].round(2).item()
+SEM_REV_A = pl_sem_a["sem"].round(2).item()
+
+(
+    ggplot(pl_samp_dist_rev_a, aes("mean_rev")) + 
+    geom_density() + 
+    labs(title = f'Sampling Distribution from Normal({zi_mean_a:.2f}, {zi_se_a:.2f})') + 
+    scale_x_continuous(
+        breaks = np.arange(0,100,0.5)
+    ) + 
+    theme(panel_grid = element_blank())
+)
+```
+
+And now we get to the good part, that for any AB Test I am really just comparing the difference of two means, and asking what I can infer from the difference of two means. 
+
+And I can ask, hey given a known difference in two means, what would be the consequences of difference AB Testing methods and decisions criteria? 
+
+    * How often would I choose the superior mean? (accuracy)
+    
+    * How close would by estimates be to the true difference (precision) 
+
+    * How fast does the model reach its decisions (speed)
+
+## Show the raw truth and the true sampling distributions and the true sampling distributinos of mean differences. 
+
+
+```{python}
+pl_gammaDensA = pl.DataFrame({
+    "rev": np.linspace(0,200,int(4e3))
+}).with_columns(
+    pl.col("rev").map_elements(
+        lambda x: stats.gamma.pdf(x, a=SHAPE_A, scale=SCALE_A),
+        return_dtype=pl.Float64
+    ).alias("dens")
+)
+
+ggplot(pl_gammaDensA, aes(x="rev", y="dens")) + geom_line()
+```
+
+
+```{python}
+# # Parameters
+# TAU_A = 0.75
+# SHAPE_A = 5
+# SCALE_A = 10
+
+# # Create DataFrame
+# pl_gammaDensA = pl.DataFrame({
+#     "rev": np.linspace(0, 200, int(4e3))
+# }).with_columns(
+#     pl.when(pl.col("rev") == 0)
+#       .then(TAU_A)
+#       .otherwise((1 - TAU_A) * stats.gamma.pdf(pl.col("rev"), a=SHAPE_A, scale=SCALE_A))
+#       .alias("dens")
+# )
+
+# pl_gammaDensA
+```
+
+# Plot
+```{python}
+import numpy as np
+import polars as pl
+from scipy import stats
+from plotnine import ggplot, aes, geom_line
+
+# Parameters
+TAU_A = 0.25
+SHAPE_A = 5
+SCALE_A = 10
+
+# Create DataFrame
+pl_gammaDensA = pl.DataFrame({
+    "rev": np.linspace(0, 200, int(4e3))
+}).with_columns(
+    pl.col("rev").map_elements(
+        lambda x: TAU_A if x == 0 else (1 - TAU_A) * stats.gamma.pdf(x, a=SHAPE_A, scale=SCALE_A),
+        return_dtype=pl.Float64
+    ).alias("dens")
+)
+
+# Plot
+(
+    ggplot(pl_gammaDensA, aes(x="rev", y="dens")) + 
+    geom_line() + 
+    geom_area(fill = "blue")
+)
+```
+
+```{python}
+def zigamma_mean_std(pi, shape, scale, n):
+    """
+    Compute mean and standard deviation of a zero-inflated gamma distribution.
+    
+    Parameters:
+        pi (float): Probability of zero (0 <= pi < 1)
+        shape (float): Gamma shape parameter (alpha)
+        scale (float): Gamma scale parameter (beta)
+        n (integer): sample size
+        
+    Returns:
+        mean (float): Mean of the zero-inflated gamma
+        std (float): Standard deviation of the zero-inflated gamma
+    """
+    # Mean and variance of the underlying gamma
+    mu = shape * scale
+    var_gamma = shape * scale**2
+    
+    # Mean of zero-inflated gamma
+    mean = (1 - pi) * mu
+    
+    # Variance of zero-inflated gamma
+    var = (1 - pi) * var_gamma + (1 - pi) * pi * mu**2
+    
+    # Standard deviation
+    std = np.sqrt(var)
+    
+    sem = std / np.sqrt(n)
+    
+    return mean, std, sem
+
+MEAN_A, SD_A, SEM_A = zigamma_mean_std(TAU_A, SHAPE_A, SCALE_A, TRIALS)
+
+print(f"Mean: {MEAN_A:.4f}")
+print(f"SD: {SD_A:.4f}")
+print(f"SEM: {SEM_A:.4f}")
+
+# MEAN_A_STR = f"{mean:.2f}" 
+# SEM_A_STR = f"{sem:.4f}"
+
+# So from the moments of the distribution we can see that the sampling distribution should have a mean and SE of `{python} MEAN_A_STR` and `{python} SEM_A_STR`. 
+
+# So from the moments of the distribution we can see that the sampling distribution should have a mean and SE of `{python} MEAN_A_STR` and `{python} SEM_A_STR`. 
+```
+
+If I sample 100k times from this zero-inflated gamma, I get the same mean and SEM from the sampling distribution: 
+```{python}
+# Parameters
+TAU_A = 0.25
+SHAPE_A = 5
+SCALE_A = 10
+
+means = []
+
+for _ in range(int(1e5)):
+    # Step 1: Generate mask for zeros
+    zeros = np.random.binomial(1, TAU_A, TRIALS)
+    # Step 2: Generate gamma values
+    gammas = stats.gamma.rvs(a=SHAPE_A, scale=SCALE_A, size=TRIALS)
+    # Step 3: Combine zeros and gamma values
+    sample = np.where(zeros == 1, 0, gammas)
+    # Step 4: Compute mean
+    means.append(sample.mean())
+
+sampling_dist = np.array(means)
+
+print(f"bs mean = {np.mean(sampling_dist)}")
+print(f"bs SE = {np.std(sampling_dist)}")
+```
+
+So now that I see that I am just sampling one mean from a normal distribution for A and sampling one mean from a normal distribution for B. And the difference of those two means also comes from a normal distribution of mean differences whose parameters are fairly straightforward to compute. 
+
+
+```{python}
+TAU_B = 0.25
+SHAPE_B = 5.1
+SCALE_B = 10
+
+MEAN_B, SD_B, SEM_B = zigamma_mean_std(TAU_B, SHAPE_B, SCALE_B, TRIALS)
+
+print(f"Mean: {MEAN_B:.4f}")
+print(f"SD: {SD_B:.4f}")
+print(f"SEM: {SEM_B:.4f}")
+```
+
+
+```{python}
+MEAN_DIFF = MEAN_B - MEAN_A
+SEM_DIFF = np.sqrt((SEM_A**2 + SEM_B**2))
+print(f"MEAN_DIFF: {MEAN_DIFF:.4f}")
+print(f"SE_diff: {SEM_DIFF:.4f}")
+```
+
+
+```{python}
+pl_diff = pl.DataFrame({
+    "obs_diff": np.random.normal(loc = MEAN_DIFF, scale = SEM_DIFF, size = int(1e3))
+})
+
+PR_POS = pl_diff.select(
+    (col("obs_diff") > 0).mean().alias("pr_pos")
+).item()
+
+print(f"{100*PR_POS}% of samples were directionally accurate")
+
+(
+    ggplot(pl_diff, aes(x="obs_diff", fill = "obs_diff > 0")) + 
+    geom_histogram() 
+)
+```
